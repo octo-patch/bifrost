@@ -188,6 +188,8 @@ func (s *Store) computeCostFromInput(input costInput, routingInfo schemas.Routin
 	switch requestType {
 	case schemas.ChatCompletionRequest, schemas.TextCompletionRequest, schemas.ResponsesRequest, schemas.RealtimeRequest, schemas.CompactionRequest:
 		return computeTextCost(pricing, input.usage, input.tier)
+	case schemas.BatchResultsRequest:
+		return computeBatchTextCost(pricing, input.usage)
 	case schemas.EmbeddingRequest:
 		return computeEmbeddingCost(pricing, input.usage, input.tier)
 	case schemas.RerankRequest:
@@ -476,6 +478,33 @@ func computeTextCost(pricing *configstoreTables.TableModelPricing, usage *schema
 	}
 
 	return inputCost + outputCost + audioCost + searchCost
+}
+
+// computeBatchTextCost handles token usage returned by batch result retrieval.
+// Batch pricing must be explicit: if the model catalog does not have batch
+// rates, do not silently fall back to synchronous request rates.
+func computeBatchTextCost(pricing *configstoreTables.TableModelPricing, usage *schemas.BifrostLLMUsage) float64 {
+	if usage == nil {
+		return 0
+	}
+	if usage.PromptTokens > 0 && pricing.InputCostPerTokenBatches == nil {
+		return 0
+	}
+	if usage.CompletionTokens > 0 && pricing.OutputCostPerTokenBatches == nil {
+		return 0
+	}
+
+	inputCost := 0.0
+	if usage.PromptTokens > 0 {
+		inputCost = float64(usage.PromptTokens) * *pricing.InputCostPerTokenBatches
+	}
+
+	outputCost := 0.0
+	if usage.CompletionTokens > 0 {
+		outputCost = float64(usage.CompletionTokens) * *pricing.OutputCostPerTokenBatches
+	}
+
+	return inputCost + outputCost
 }
 
 // computeEmbeddingCost handles embedding requests (input-only).

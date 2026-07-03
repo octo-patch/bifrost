@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	bifrost "github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
+	"github.com/maximhq/bifrost/framework/batchaccounting"
 	"github.com/maximhq/bifrost/framework/configstore"
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/framework/mcpcatalog"
@@ -58,6 +59,7 @@ type BaseGovernancePlugin interface {
 	PostMCPHook(ctx *schemas.BifrostContext, resp *schemas.BifrostMCPResponse, bifrostErr *schemas.BifrostError) (*schemas.BifrostMCPResponse, *schemas.BifrostError, error)
 	Cleanup() error
 	GetGovernanceStore() GovernanceStore
+	ReportBatchUsage(ctx context.Context, usage batchaccounting.BatchUsageReport) error
 }
 
 // GovernancePlugin implements the main governance plugin with hierarchical budget system
@@ -1711,6 +1713,24 @@ func (p *GovernancePlugin) postHookWorker(result *schemas.BifrostResponse, bifro
 // GetGovernanceStore returns the governance store
 func (p *GovernancePlugin) GetGovernanceStore() GovernanceStore {
 	return p.store
+}
+
+func (p *GovernancePlugin) ReportBatchUsage(ctx context.Context, usage batchaccounting.BatchUsageReport) error {
+	if usage.Cost > 0 {
+		for _, budgetID := range usage.BudgetIDs {
+			if err := p.store.BumpBudgetUsage(ctx, budgetID, usage.Cost); err != nil {
+				return err
+			}
+		}
+	}
+
+	requestDelta := int64(1)
+	for _, rateLimitID := range usage.RateLimitIDs {
+		if err := p.store.BumpRateLimitUsageBy(ctx, rateLimitID, usage.TokensUsed, requestDelta); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GenerateVirtualKey is a helper function

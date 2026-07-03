@@ -270,6 +270,67 @@ type Log struct {
 	RoutingRule *tables.TableRoutingRule `gorm:"-" json:"routing_rule,omitempty"` // redacted
 }
 
+const (
+	BatchJobAccountingStatusPending     = "pending"
+	BatchJobAccountingStatusProcessing  = "processing"
+	BatchJobAccountingStatusAccounted   = "accounted"
+	BatchJobAccountingStatusUnpriceable = "unpriceable"
+	BatchJobAccountingStatusError       = "error"
+)
+
+// BatchJob records the provider batch lifecycle and delayed accounting state.
+// The stable ID is provider + batch ID so user-triggered /results and future
+// reconcilers can share the same cluster-safe claim.
+type BatchJob struct {
+	ID                string     `gorm:"primaryKey;type:varchar(512)" json:"id"`
+	Provider          string     `gorm:"type:varchar(255);index;not null" json:"provider"`
+	BatchID           string     `gorm:"type:varchar(255);index;not null" json:"batch_id"`
+	Endpoint          string     `gorm:"type:varchar(255);index" json:"endpoint,omitempty"`
+	Model             string     `gorm:"type:varchar(255);index" json:"model,omitempty"`
+	ProviderStatus    string     `gorm:"type:varchar(50);index" json:"provider_status,omitempty"`
+	InputFileID       string     `gorm:"type:varchar(255)" json:"input_file_id,omitempty"`
+	OutputFileID      *string    `gorm:"type:varchar(255)" json:"output_file_id,omitempty"`
+	ErrorFileID       *string    `gorm:"type:varchar(255)" json:"error_file_id,omitempty"`
+	ResultsURL        *string    `gorm:"type:text" json:"results_url,omitempty"`
+	OperationName     *string    `gorm:"type:text" json:"operation_name,omitempty"`
+	RequestCounts     string     `gorm:"type:text" json:"-"`
+	NextCheckAt       *time.Time `gorm:"index" json:"next_check_at,omitempty"`
+	LastCheckedAt     *time.Time `gorm:"index" json:"last_checked_at,omitempty"`
+	AccountingStatus  string     `gorm:"type:varchar(50);index;not null" json:"accounting_status"`
+	ClaimedBy         *string    `gorm:"type:varchar(255);index" json:"claimed_by,omitempty"`
+	ClaimToken        *string    `gorm:"type:varchar(255);index" json:"claim_token,omitempty"`
+	ClaimExpiresAt    *time.Time `gorm:"index" json:"claim_expires_at,omitempty"`
+	AccountedLogID    *string    `gorm:"type:varchar(255);index" json:"accounted_log_id,omitempty"`
+	Cost              *float64   `gorm:"index" json:"cost,omitempty"`
+	PromptTokens      int        `gorm:"default:0" json:"prompt_tokens"`
+	CompletionTokens  int        `gorm:"default:0" json:"completion_tokens"`
+	TotalTokens       int        `gorm:"default:0" json:"total_tokens"`
+	ModelBreakdown    string     `gorm:"type:text" json:"-"`
+	UnpriceableReason *string    `gorm:"type:varchar(255);index" json:"unpriceable_reason,omitempty"`
+	LastError         *string    `gorm:"type:text" json:"last_error,omitempty"`
+
+	SelectedKeyID   string  `gorm:"type:varchar(255);index" json:"selected_key_id,omitempty"`
+	VirtualKeyID    *string `gorm:"type:varchar(255);index" json:"virtual_key_id,omitempty"`
+	RoutingRuleID   *string `gorm:"type:varchar(255);index" json:"routing_rule_id,omitempty"`
+	UserID          *string `gorm:"type:varchar(255);index" json:"user_id,omitempty"`
+	TeamID          *string `gorm:"type:varchar(255);index" json:"team_id,omitempty"`
+	CustomerID      *string `gorm:"type:varchar(255);index" json:"customer_id,omitempty"`
+	BusinessUnitID  *string `gorm:"type:varchar(255);index" json:"business_unit_id,omitempty"`
+	TeamIDs         *string `gorm:"type:text" json:"-"`
+	CustomerIDs     *string `gorm:"type:text" json:"-"`
+	BusinessUnitIDs *string `gorm:"type:text" json:"-"`
+	BudgetIDs       *string `gorm:"type:text" json:"-"`
+	RateLimitIDs    *string `gorm:"type:text" json:"-"`
+	ClusterNodeID   *string `gorm:"type:varchar(255)" json:"cluster_node_id,omitempty"`
+
+	CreatedAt time.Time `gorm:"index;not null" json:"created_at"`
+	UpdatedAt time.Time `gorm:"not null" json:"updated_at"`
+}
+
+func (BatchJob) TableName() string {
+	return "batch_jobs"
+}
+
 // NewLogEntryFromMap creates a new Log from a map[string]interface{}
 func NewLogEntryFromMap(entry map[string]interface{}) *Log {
 	var log Log

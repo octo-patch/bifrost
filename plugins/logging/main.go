@@ -16,6 +16,7 @@ import (
 	bifrost "github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/mcp"
 	"github.com/maximhq/bifrost/core/schemas"
+	"github.com/maximhq/bifrost/framework/batchaccounting"
 	"github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/framework/logstore"
 	"github.com/maximhq/bifrost/framework/mcpcatalog"
@@ -184,6 +185,154 @@ func (p *LoggerPlugin) applyErrorBillingFromBilledUsage(ctx *schemas.BifrostCont
 		if cost := p.pricingManager.CalculateCostForUsage(billed, schemas.ModelProvider(entry.Provider), entry.Model, requestType, pricingScopes); cost > 0 {
 			entry.Cost = &cost
 		}
+	}
+}
+
+func (p *LoggerPlugin) accountBatchResults(entry *logstore.Log, result *schemas.BifrostResponse, bifrostErr *schemas.BifrostError, pricingScopes *modelcatalog.PricingLookupScopes) {
+	if bifrostErr != nil || result == nil || result.BatchResultsResponse == nil || entry == nil || p.pricingManager == nil {
+		return
+	}
+	batchResp := result.BatchResultsResponse
+	if batchResp.BatchID == "" || len(batchResp.Results) == 0 {
+		return
+	}
+
+	claimedBy := "logging"
+	if nodeID, _ := p.clusterNodeID.Load().(string); nodeID != "" {
+		claimedBy = "logging:" + nodeID
+	}
+	p.mu.Lock()
+	usageReporter := p.batchUsageReporter
+	p.mu.Unlock()
+
+	summary, err := batchaccounting.AccountBatchResults(p.ctx, p.store, p.pricingManager, batchaccounting.Request{
+		Provider:      schemas.ModelProvider(entry.Provider),
+		BatchID:       batchResp.BatchID,
+		FallbackModel: entry.Model,
+		Results:       batchResp.Results,
+		BatchJob:      batchJobFromEntry(entry, batchResp.BatchID, "", entry.Model, string(schemas.BatchStatusCompleted)),
+		BaseLog:       entry,
+		LogWriter:     p,
+		UsageReporter: usageReporter,
+		ClaimedBy:     claimedBy,
+		Scopes:        pricingScopes,
+	})
+	if err != nil {
+		p.logger.Warn("failed to account batch results for provider=%s batch_id=%s: %v", entry.Provider, batchResp.BatchID, err)
+		return
+	}
+	if summary != nil && summary.Accounted {
+		p.logger.Info("accounted batch results for provider=%s batch_id=%s cost=%f log_id=%s", entry.Provider, batchResp.BatchID, summary.Cost, summary.LogID)
+	}
+}
+
+func (p *LoggerPlugin) CreateBatchAggregateLog(ctx context.Context, entry *logstore.Log) error {
+	if entry == nil {
+		return nil
+	}
+	if err := p.store.CreateIfNotExists(ctx, entry); err != nil {
+		return err
+	}
+	p.makePostWriteCallback(nil)(entry)
+	return nil
+}
+
+func (p *LoggerPlugin) recordBatchJobLifecycle(entry *logstore.Log, result *schemas.BifrostResponse) {
+	if entry == nil || result == nil {
+		return
+	}
+
+	var job *logstore.BatchJob
+	now := time.Now().UTC()
+	switch {
+	case result.BatchCreateResponse != nil:
+		resp := result.BatchCreateResponse
+		job = batchJobFromEntry(entry, resp.ID, resp.Endpoint, entry.Model, string(resp.Status))
+		job.InputFileID = resp.InputFileID
+		job.OutputFileID = resp.OutputFileID
+		job.ErrorFileID = resp.ErrorFileID
+		job.ResultsURL = resp.ResultsURL
+		job.OperationName = resp.OperationName
+		job.RequestCounts = marshalJSONForBatchJob(resp.RequestCounts)
+	case result.BatchRetrieveResponse != nil:
+		resp := result.BatchRetrieveResponse
+		job = batchJobFromEntry(entry, resp.ID, resp.Endpoint, entry.Model, string(resp.Status))
+		job.InputFileID = resp.InputFileID
+		job.OutputFileID = resp.OutputFileID
+		job.ErrorFileID = resp.ErrorFileID
+		job.ResultsURL = resp.ResultsURL
+		job.OperationName = resp.OperationName
+		job.RequestCounts = marshalJSONForBatchJob(resp.RequestCounts)
+		job.LastCheckedAt = &now
+	default:
+		return
+	}
+
+	if job.BatchID == "" {
+		return
+	}
+	if !isTerminalBatchStatus(job.ProviderStatus) {
+		next := now.Add(time.Minute)
+		job.NextCheckAt = &next
+	}
+	if err := p.store.UpsertBatchJob(p.ctx, job); err != nil {
+		p.logger.Warn("failed to record batch job lifecycle for provider=%s batch_id=%s: %v", job.Provider, job.BatchID, err)
+	}
+}
+
+func batchJobFromEntry(entry *logstore.Log, batchID string, endpoint string, model string, status string) *logstore.BatchJob {
+	job := &logstore.BatchJob{
+		Provider:         entry.Provider,
+		BatchID:          batchID,
+		Endpoint:         endpoint,
+		Model:            model,
+		ProviderStatus:   status,
+		AccountingStatus: logstore.BatchJobAccountingStatusPending,
+		SelectedKeyID:    entry.SelectedKeyID,
+		VirtualKeyID:     entry.VirtualKeyID,
+		RoutingRuleID:    entry.RoutingRuleID,
+		UserID:           entry.UserID,
+		TeamID:           entry.TeamID,
+		CustomerID:       entry.CustomerID,
+		BusinessUnitID:   entry.BusinessUnitID,
+		BudgetIDs:        stringSlicePtr(entry.BudgetIDsParsed),
+		RateLimitIDs:     stringSlicePtr(entry.RateLimitIDsParsed),
+		TeamIDs:          stringSlicePtr(entry.TeamIDsParsed),
+		CustomerIDs:      stringSlicePtr(entry.CustomerIDsParsed),
+		BusinessUnitIDs:  stringSlicePtr(entry.BusinessUnitIDsParsed),
+		ClusterNodeID:    entry.ClusterNodeID,
+	}
+	if job.ID == "" && job.Provider != "" && job.BatchID != "" {
+		job.ID = logstore.BatchJobID(job.Provider, job.BatchID)
+	}
+	return job
+}
+
+func stringSlicePtr(values []string) *string {
+	if len(values) == 0 {
+		return nil
+	}
+	out, err := sonic.MarshalString(values)
+	if err != nil {
+		return nil
+	}
+	return &out
+}
+
+func marshalJSONForBatchJob(value any) string {
+	out, err := sonic.MarshalString(value)
+	if err != nil || out == "{}" {
+		return ""
+	}
+	return out
+}
+
+func isTerminalBatchStatus(status string) bool {
+	switch schemas.BatchStatus(status) {
+	case schemas.BatchStatusCompleted, schemas.BatchStatusFailed, schemas.BatchStatusExpired, schemas.BatchStatusCancelled, schemas.BatchStatusEnded, schemas.BatchStatusDeleted:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -367,6 +516,7 @@ type LoggerPlugin struct {
 	wg                     sync.WaitGroup
 	logger                 schemas.Logger
 	logCallback            LogCallback
+	batchUsageReporter     batchaccounting.UsageReporter
 	mcpToolLogCallback     MCPToolLogCallback // Callback for MCP tool log entries
 	droppedRequests        atomic.Int64
 	cleanupTicker          *time.Ticker          // Ticker for cleaning up old processing logs
@@ -382,6 +532,7 @@ type LoggerPlugin struct {
 	clusterNodeID          atomic.Value          // Cluster node ID (string) for log attribution in clustered deployments
 	batchCtx               context.Context       // Cancelled by Cleanup to stop the batchWriter goroutine before any further DB work
 	batchCancel            context.CancelFunc    // Cancels batchCtx
+	batchSweeperCancel     context.CancelFunc    // Cancels the batch accounting sweeper, when enabled
 	batchWriterDone        chan struct{}         // Closed by batchWriter on exit; receiving from it transfers writeQueue ownership to Cleanup
 	recoveredBatch         []*writeQueueEntry    // batchWriter parks its in-memory batch here before exiting; safe to read after batchWriterDone closes (happens-before)
 }
@@ -505,6 +656,38 @@ func (p *LoggerPlugin) SetLogCallback(callback LogCallback) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.logCallback = callback
+}
+
+func (p *LoggerPlugin) SetBatchUsageReporter(reporter batchaccounting.UsageReporter) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.batchUsageReporter = reporter
+}
+
+func (p *LoggerPlugin) StartBatchAccountingSweeper(fetcher batchaccounting.BatchResultFetcher, interval time.Duration, kvStore schemas.KVStore) context.CancelFunc {
+	if fetcher == nil || p.store == nil || p.pricingManager == nil {
+		return func() {}
+	}
+	ctx, cancel := context.WithCancel(p.ctx)
+	p.mu.Lock()
+	if p.batchSweeperCancel != nil {
+		p.batchSweeperCancel()
+	}
+	p.batchSweeperCancel = cancel
+	usageReporter := p.batchUsageReporter
+	p.mu.Unlock()
+	sweeper := batchaccounting.NewSweeper(p.store, p.pricingManager, fetcher, p, usageReporter, batchaccounting.SweeperConfig{
+		Interval:  interval,
+		ClaimedBy: "logging",
+		Provider:  schemas.OpenAI,
+		KVStore:   kvStore,
+	})
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		sweeper.Run(ctx)
+	}()
+	return cancel
 }
 
 // GetName returns the name of the plugin
@@ -1214,6 +1397,9 @@ func (p *LoggerPlugin) PostLLMHook(ctx *schemas.BifrostContext, result *schemas.
 		}
 	}
 	applyLargePayloadPreviewsToEntry(ctx, entry, contentLoggingEnabled)
+	if bifrostErr == nil {
+		p.recordBatchJobLifecycle(entry, result)
+	}
 
 	// Calculate cost
 	var cacheDebug *schemas.BifrostCacheDebug
@@ -1226,6 +1412,7 @@ func (p *LoggerPlugin) PostLLMHook(ctx *schemas.BifrostContext, result *schemas.
 		if cost := p.pricingManager.CalculateCost(result, pricingScopes); cost > 0 {
 			entry.Cost = &cost
 		}
+		p.accountBatchResults(entry, result, bifrostErr, pricingScopes)
 	}
 
 	// Pre-apply denormalized fields for WebSocket callback enrichment
@@ -1260,6 +1447,12 @@ func (p *LoggerPlugin) PostLLMHook(ctx *schemas.BifrostContext, result *schemas.
 // cannot wedge the server's overall 30s shutdown budget.
 func (p *LoggerPlugin) Cleanup() error {
 	p.cleanupOnce.Do(func() {
+		p.mu.Lock()
+		if p.batchSweeperCancel != nil {
+			p.batchSweeperCancel()
+			p.batchSweeperCancel = nil
+		}
+		p.mu.Unlock()
 		if p.cleanupTicker != nil {
 			p.cleanupTicker.Stop()
 		}

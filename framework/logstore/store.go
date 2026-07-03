@@ -24,6 +24,12 @@ type LogStore interface {
 	Create(ctx context.Context, entry *Log) error
 	CreateIfNotExists(ctx context.Context, entry *Log) error
 	BatchCreateIfNotExists(ctx context.Context, entries []*Log) error
+	UpsertBatchJob(ctx context.Context, job *BatchJob) error
+	FindDueBatchJobs(ctx context.Context, provider string, now time.Time, limit int) ([]*BatchJob, error)
+	ClaimBatchJobAccounting(ctx context.Context, jobID string, claimedBy string, ttl time.Duration) (string, bool, error)
+	CompleteBatchJobAccounting(ctx context.Context, jobID string, claimToken string, logID string, cost float64, promptTokens int, completionTokens int, totalTokens int, modelBreakdown string) error
+	MarkBatchJobUnpriceable(ctx context.Context, jobID string, claimToken string, reason string, err error) error
+	FailBatchJobAccounting(ctx context.Context, jobID string, claimToken string, err error) error
 	FindByID(ctx context.Context, id string) (*Log, error)
 	IsLogEntryPresent(ctx context.Context, id string) (bool, error)
 	FindFirst(ctx context.Context, query any, fields ...string) (*Log, error)
