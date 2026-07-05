@@ -395,9 +395,9 @@ func TestComputeTextCost_1hrCacheCreationAbove200k_UsesAbove1hrAbove200kRate(t *
 	p.CacheCreationInputTokenCostAbove1hrAbove200kTokens = bifrost.Ptr(0.000015)
 
 	usage := &schemas.BifrostLLMUsage{
-		PromptTokens:     180000,
+		PromptTokens:     210000,
 		CompletionTokens: 25000,
-		TotalTokens:      205000, // above 200k threshold
+		TotalTokens:      235000, // input is above 200k threshold
 		PromptTokensDetails: &schemas.ChatPromptTokensDetails{
 			CachedWriteTokens: 10000,
 			CachedWriteTokenDetails: &schemas.ChatCachedWriteTokenDetails{
@@ -409,11 +409,11 @@ func TestComputeTextCost_1hrCacheCreationAbove200k_UsesAbove1hrAbove200kRate(t *
 	cost := computeTextCost(&p, usage, serviceTier{})
 
 	// Input rate (>200k): 0.000006; output rate (>200k): 0.00003
-	// Input (non-cached): (180000-10000)*0.000006 = 170000*0.000006 = 1.02
+	// Input (non-cached): (210000-10000)*0.000006 = 200000*0.000006 = 1.20
 	// Cache creation 1hr above 200k: 10000*0.000015 = 0.15
 	// Output: 25000*0.00003 = 0.75
-	// Total: 1.02 + 0.15 + 0.75 = 1.92
-	assert.InDelta(t, 1.92, cost, 1e-9)
+	// Total: 1.20 + 0.15 + 0.75 = 2.10
+	assert.InDelta(t, 2.10, cost, 1e-9)
 }
 
 func TestComputeTextCost_1hrCacheCreationAbove200k_FallsBackToAbove1hrWhenAbove200kRateAbsent(t *testing.T) {
@@ -429,9 +429,9 @@ func TestComputeTextCost_1hrCacheCreationAbove200k_FallsBackToAbove1hrWhenAbove2
 	// CacheCreationInputTokenCostAbove1hrAbove200kTokens intentionally left nil
 
 	usage := &schemas.BifrostLLMUsage{
-		PromptTokens:     180000,
+		PromptTokens:     210000,
 		CompletionTokens: 25000,
-		TotalTokens:      205000,
+		TotalTokens:      235000,
 		PromptTokensDetails: &schemas.ChatPromptTokensDetails{
 			CachedWriteTokens: 10000,
 			CachedWriteTokenDetails: &schemas.ChatCachedWriteTokenDetails{
@@ -443,10 +443,10 @@ func TestComputeTextCost_1hrCacheCreationAbove200k_FallsBackToAbove1hrWhenAbove2
 	cost := computeTextCost(&p, usage, serviceTier{})
 
 	// Cache creation 1hr (no above_200k_1hr rate, uses above_1hr): 10000*0.000009 = 0.09
-	// Input (non-cached): 170000*0.000006 = 1.02
+	// Input (non-cached): 200000*0.000006 = 1.20
 	// Output: 25000*0.00003 = 0.75
-	// Total: 1.02 + 0.09 + 0.75 = 1.86
-	assert.InDelta(t, 1.86, cost, 1e-9)
+	// Total: 1.20 + 0.09 + 0.75 = 2.04
+	assert.InDelta(t, 2.04, cost, 1e-9)
 }
 
 func TestComputeTextCost_1hrCacheCreationAbove200k_FallsBackToStandardAbove200kWhenNo1hrRates(t *testing.T) {
@@ -460,9 +460,9 @@ func TestComputeTextCost_1hrCacheCreationAbove200k_FallsBackToStandardAbove200kW
 	// Neither CacheCreationInputTokenCostAbove1hr nor Above1hrAbove200k is set
 
 	usage := &schemas.BifrostLLMUsage{
-		PromptTokens:     180000,
+		PromptTokens:     210000,
 		CompletionTokens: 25000,
-		TotalTokens:      205000,
+		TotalTokens:      235000,
 		PromptTokensDetails: &schemas.ChatPromptTokensDetails{
 			CachedWriteTokens: 10000,
 			CachedWriteTokenDetails: &schemas.ChatCachedWriteTokenDetails{
@@ -474,10 +474,10 @@ func TestComputeTextCost_1hrCacheCreationAbove200k_FallsBackToStandardAbove200kW
 	cost := computeTextCost(&p, usage, serviceTier{})
 
 	// Cache creation (1hr → no 1hr rates → standard above_200k): 10000*0.000002 = 0.02
-	// Input (non-cached): 170000*0.0000016 = 0.272
+	// Input (non-cached): 200000*0.0000016 = 0.32
 	// Output: 25000*0.000008 = 0.2
-	// Total: 0.272 + 0.02 + 0.2 = 0.492
-	assert.InDelta(t, 0.492, cost, 1e-9)
+	// Total: 0.32 + 0.02 + 0.2 = 0.54
+	assert.InDelta(t, 0.54, cost, 1e-9)
 }
 
 func TestComputeTextCost_Tiered200k(t *testing.T) {
@@ -487,16 +487,16 @@ func TestComputeTextCost_Tiered200k(t *testing.T) {
 	p.OutputCostPerTokenAbove200kTokens = bifrost.Ptr(0.00003)
 
 	usage := &schemas.BifrostLLMUsage{
-		PromptTokens:     180000,
+		PromptTokens:     210000,
 		CompletionTokens: 30000,
-		TotalTokens:      210000, // Above 200k threshold
+		TotalTokens:      240000, // input is above 200k threshold
 	}
 
 	cost := computeTextCost(&p, usage, serviceTier{})
 
-	// Uses tiered rate since total > 200k
-	// 180000 * 0.000006 + 30000 * 0.00003 = 1.08 + 0.90 = 1.98
-	assert.InDelta(t, 1.98, cost, 1e-9)
+	// Uses tiered rate since input > 200k
+	// 210000 * 0.000006 + 30000 * 0.00003 = 1.26 + 0.90 = 2.16
+	assert.InDelta(t, 2.16, cost, 1e-9)
 }
 
 func TestComputeTextCost_Below200kUsesBaseRate(t *testing.T) {
@@ -512,9 +512,27 @@ func TestComputeTextCost_Below200kUsesBaseRate(t *testing.T) {
 
 	cost := computeTextCost(&p, usage, serviceTier{})
 
-	// Uses base rate since total < 200k
+	// Uses base rate since input < 200k
 	// 1000 * 0.000003 + 500 * 0.000015 = 0.003 + 0.0075 = 0.0105
 	assert.InDelta(t, 0.0105, cost, 1e-12)
+}
+
+func TestComputeTextCost_TotalAbove200kButInputBelow200kUsesBaseRate(t *testing.T) {
+	p := chatPricing(0.000003, 0.000015)
+	p.InputCostPerTokenAbove200kTokens = bifrost.Ptr(0.000006)
+	p.OutputCostPerTokenAbove200kTokens = bifrost.Ptr(0.00003)
+
+	usage := &schemas.BifrostLLMUsage{
+		PromptTokens:     180000,
+		CompletionTokens: 30000,
+		TotalTokens:      210000, // total is above 200k, input is not
+	}
+
+	cost := computeTextCost(&p, usage, serviceTier{})
+
+	// Uses base rates because long-context tiers are selected by input tokens.
+	// 180000 * 0.000003 + 30000 * 0.000015 = 0.54 + 0.45 = 0.99
+	assert.InDelta(t, 0.99, cost, 1e-9)
 }
 
 func TestComputeTextCost_Tiered272k(t *testing.T) {
@@ -525,16 +543,16 @@ func TestComputeTextCost_Tiered272k(t *testing.T) {
 	p.OutputCostPerTokenAbove272kTokens = new(0.000045)
 
 	usage := &schemas.BifrostLLMUsage{
-		PromptTokens:     250000,
+		PromptTokens:     280000,
 		CompletionTokens: 30000,
-		TotalTokens:      280000, // Above 272k threshold
+		TotalTokens:      310000, // input is above 272k threshold
 	}
 
 	cost := computeTextCost(&p, usage, serviceTier{})
 
-	// Uses 272k tiered rate since total > 272k
-	// 250000 * 0.000009 + 30000 * 0.000045 = 2.25 + 1.35 = 3.60
-	assert.InDelta(t, 3.60, cost, 1e-9)
+	// Uses 272k tiered rate since input > 272k
+	// 280000 * 0.000009 + 30000 * 0.000045 = 2.52 + 1.35 = 3.87
+	assert.InDelta(t, 3.87, cost, 1e-9)
 }
 
 func TestComputeTextCost_Between200kAnd272kUses200kRate(t *testing.T) {
@@ -545,16 +563,16 @@ func TestComputeTextCost_Between200kAnd272kUses200kRate(t *testing.T) {
 	p.OutputCostPerTokenAbove272kTokens = new(0.000045)
 
 	usage := &schemas.BifrostLLMUsage{
-		PromptTokens:     200000,
+		PromptTokens:     230000,
 		CompletionTokens: 30000,
-		TotalTokens:      230000, // Between 200k and 272k
+		TotalTokens:      260000, // input is between 200k and 272k
 	}
 
 	cost := computeTextCost(&p, usage, serviceTier{})
 
-	// Uses 200k tiered rate since total > 200k but <= 272k
-	// 200000 * 0.000006 + 30000 * 0.00003 = 1.20 + 0.90 = 2.10
-	assert.InDelta(t, 2.10, cost, 1e-9)
+	// Uses 200k tiered rate since input > 200k but <= 272k
+	// 230000 * 0.000006 + 30000 * 0.00003 = 1.38 + 0.90 = 2.28
+	assert.InDelta(t, 2.28, cost, 1e-9)
 }
 
 func TestComputeTextCost_272kTierWithCacheRead(t *testing.T) {
@@ -565,9 +583,9 @@ func TestComputeTextCost_272kTierWithCacheRead(t *testing.T) {
 	p.CacheReadInputTokenCostAbove272kTokens = new(0.0000009)
 
 	usage := &schemas.BifrostLLMUsage{
-		PromptTokens:     250000,
+		PromptTokens:     280000,
 		CompletionTokens: 30000,
-		TotalTokens:      280000, // Above 272k
+		TotalTokens:      310000, // input is above 272k
 		PromptTokensDetails: &schemas.ChatPromptTokensDetails{
 			CachedReadTokens: 50000,
 		},
@@ -575,11 +593,11 @@ func TestComputeTextCost_272kTierWithCacheRead(t *testing.T) {
 
 	cost := computeTextCost(&p, usage, serviceTier{})
 
-	// Non-cached input: (250000-50000) * 0.000009 = 200000 * 0.000009 = 1.80
+	// Non-cached input: (280000-50000) * 0.000009 = 230000 * 0.000009 = 2.07
 	// Cached read: 50000 * 0.0000009 = 0.045
 	// Output: 30000 * 0.000045 = 1.35
-	// Total: 1.80 + 0.045 + 1.35 = 3.195
-	assert.InDelta(t, 3.195, cost, 1e-9)
+	// Total: 2.07 + 0.045 + 1.35 = 3.465
+	assert.InDelta(t, 3.465, cost, 1e-9)
 }
 
 func TestComputeTextCost_SearchQueryCost(t *testing.T) {
@@ -1758,15 +1776,15 @@ func TestCalculateCost_200kTier_EndToEnd(t *testing.T) {
 	})
 
 	resp := makeChatResponse(schemas.Bedrock, "anthropic.claude-3-5-sonnet-20240620-v1:0", &schemas.BifrostLLMUsage{
-		PromptTokens:     190000,
+		PromptTokens:     210000,
 		CompletionTokens: 20000,
-		TotalTokens:      210000, // Above 200k
+		TotalTokens:      230000, // input is above 200k
 	})
 
 	cost := s.CalculateCost(resp, nil)
 	// Tiered rate: input=0.000006, output=0.00003
-	// 190000*0.000006 + 20000*0.00003 = 1.14 + 0.6 = 1.74
-	assert.InDelta(t, 1.74, cost, 1e-9)
+	// 210000*0.000006 + 20000*0.00003 = 1.26 + 0.6 = 1.86
+	assert.InDelta(t, 1.86, cost, 1e-9)
 }
 
 func TestCalculateCost_272kTier_EndToEnd(t *testing.T) {
@@ -1788,15 +1806,15 @@ func TestCalculateCost_272kTier_EndToEnd(t *testing.T) {
 	})
 
 	resp := makeChatResponse(schemas.Anthropic, "claude-3-7-sonnet", &schemas.BifrostLLMUsage{
-		PromptTokens:     250000,
+		PromptTokens:     280000,
 		CompletionTokens: 30000,
-		TotalTokens:      280000, // Above 272k
+		TotalTokens:      310000, // input is above 272k
 	})
 
 	cost := s.CalculateCost(resp, nil)
 	// Tiered rate: input=0.000009, output=0.000045
-	// 250000*0.000009 + 30000*0.000045 = 2.25 + 1.35 = 3.60
-	assert.InDelta(t, 3.60, cost, 1e-9)
+	// 280000*0.000009 + 30000*0.000045 = 2.52 + 1.35 = 3.87
+	assert.InDelta(t, 3.87, cost, 1e-9)
 }
 
 func TestCalculateCost_272kTier_CacheReadFallbackChain(t *testing.T) {
@@ -1817,20 +1835,20 @@ func TestCalculateCost_272kTier_CacheReadFallbackChain(t *testing.T) {
 	})
 
 	resp := makeChatResponse(schemas.Anthropic, "claude-3-7-sonnet", &schemas.BifrostLLMUsage{
-		PromptTokens:     250000,
+		PromptTokens:     280000,
 		CompletionTokens: 30000,
-		TotalTokens:      280000,
+		TotalTokens:      310000,
 		PromptTokensDetails: &schemas.ChatPromptTokensDetails{
 			CachedReadTokens: 50000,
 		},
 	})
 
 	cost := s.CalculateCost(resp, nil)
-	// Non-cached input: (250000-50000) * 0.000009 = 200000 * 0.000009 = 1.80
+	// Non-cached input: (280000-50000) * 0.000009 = 230000 * 0.000009 = 2.07
 	// Cached read (272k rate): 50000 * 0.0000009 = 0.045
 	// Output: 30000 * 0.000045 = 1.35
-	// Total: 1.80 + 0.045 + 1.35 = 3.195
-	assert.InDelta(t, 3.195, cost, 1e-9)
+	// Total: 2.07 + 0.045 + 1.35 = 3.465
+	assert.InDelta(t, 3.465, cost, 1e-9)
 }
 
 // =========================================================================
@@ -1881,15 +1899,15 @@ func TestComputeTextCost_Priority272kTier(t *testing.T) {
 	p.OutputCostPerTokenAbove272kTokensPriority = new(0.00006)
 
 	usage := &schemas.BifrostLLMUsage{
-		PromptTokens:     250000,
+		PromptTokens:     280000,
 		CompletionTokens: 30000,
-		TotalTokens:      280000,
+		TotalTokens:      310000,
 	}
 
 	cost := computeTextCost(&p, usage, serviceTier{isPriority: true})
 
-	// Uses 272k priority rates: 250000*0.000012 + 30000*0.00006 = 3.00 + 1.80 = 4.80
-	assert.InDelta(t, 4.80, cost, 1e-9)
+	// Uses 272k priority rates: 280000*0.000012 + 30000*0.00006 = 3.36 + 1.80 = 5.16
+	assert.InDelta(t, 5.16, cost, 1e-9)
 }
 
 func TestComputeTextCost_Priority272kTierFallsBackToNonPriority272k(t *testing.T) {
@@ -1899,15 +1917,15 @@ func TestComputeTextCost_Priority272kTierFallsBackToNonPriority272k(t *testing.T
 	p.OutputCostPerTokenAbove272kTokens = new(0.000045)
 
 	usage := &schemas.BifrostLLMUsage{
-		PromptTokens:     250000,
+		PromptTokens:     280000,
 		CompletionTokens: 30000,
-		TotalTokens:      280000,
+		TotalTokens:      310000,
 	}
 
 	cost := computeTextCost(&p, usage, serviceTier{isPriority: true})
 
-	// Falls back to non-priority 272k rate: 250000*0.000009 + 30000*0.000045 = 2.25 + 1.35 = 3.60
-	assert.InDelta(t, 3.60, cost, 1e-9)
+	// Falls back to non-priority 272k rate: 280000*0.000009 + 30000*0.000045 = 2.52 + 1.35 = 3.87
+	assert.InDelta(t, 3.87, cost, 1e-9)
 }
 
 func TestComputeTextCost_PriorityCacheReadRate(t *testing.T) {
